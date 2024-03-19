@@ -252,7 +252,7 @@ CompactionHorizonCorrectness ==
                                  ELSE messages[i]]
     IN
         \A i \in 1..Len(messagesBeforeHorizon):
-            IF messagesBeforeHorizon[i].key = NullKey
+            IF messagesBeforeHorizon[i] = Nil
             THEN RetainNullKey => \E j \in 1..Len(compactedLedger): compactedLedger[j] = messagesBeforeHorizon[i]
             ELSE \E j \in 1..Len(compactedLedger):
                 /\ compactedLedger[j].key = messagesBeforeHorizon[i].key
