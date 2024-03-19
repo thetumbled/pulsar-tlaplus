@@ -235,6 +235,7 @@ TypeSafe ==
 
 
 \* the useless compacted ledger should be deleted, we model deletion as Nil
+\* we can use this invariant to reproduce the ledger leak bug, which is not fixed yet
 CompactedLedgerLeak == Cardinality({i \in 1..CompactionTimesLimit : compactedLedgers[i] # Nil}) <= 2
 
 \* the messages before the compaction horizon should be available in the compacted ledger.
