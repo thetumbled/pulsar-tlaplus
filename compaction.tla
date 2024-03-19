@@ -4,7 +4,6 @@ EXTENDS Naturals, FiniteSets, Sequences, Integers, TLC
 (*
 This specification model the topic compaction feature of pulsar.
 There are three roles in the system: producer, consumer and compactor.
-For simplicity, we use index to represent the MessageId, index from 1 to MessageSentLimit.
 *)
 
 \* Input parameters
@@ -70,7 +69,7 @@ vars == <<bookieVars, compactorVars, otherVars>>
 \* producer sends messages
 \* may be we could replace the producer with pre-defined messages to minimize the state space
 ConstructMessage(inputKey, inputValue) ==
-    [key |-> inputKey, value |-> inputValue]
+    [id |-> Len(messages) + 1, key |-> inputKey, value |-> inputValue]
 
 Producer ==
     /\ Len(messages) < MessageSentLimit
@@ -101,10 +100,9 @@ CompactMessages(messages2, phaseOneResult2) ==
                                 ELSE IF i = phaseOneResult2[messages2[i].key]
                                      THEN messages2[i]
                                      ELSE Nil]
-        ValidIndex == {i \in 1..Len(compactedMessages) : compactedMessages[i] # Nil}
     IN
-        \* filter out the nil messages
-        [i \in ValidIndex |-> compactedMessages[i]]
+        \* filter out the nil messages by SelectSeq.
+        SelectSeq(compactedMessages, LAMBDA i: i # Nil)
 
 CompactorPhaseTwoWrite ==
     /\ phaseOneResult # Nil
@@ -211,14 +209,16 @@ Spec == Init /\ [][Next]_vars
 
 \* Safety properties
 TypeSafe ==
-    /\ messages \in Seq([key: KeySet, value: ValueSet])
-    /\ compactedLedgers \in [1..CompactionTimesLimit -> Seq([key: KeySet, value: ValueSet])]
-    /\ phaseOneResult \in [KeySet -> 1..MessageSentLimit]
-    /\ compactorState \in CompactorState
-    /\ compactionHorizon \in 1..MessageSentLimit
-    /\ compactedTopicContext \in 1..CompactionTimesLimit
-    /\ crashTimes \in 0..(MaxCrashTimes-1)
-    /\ cursor \in [compactionHorizon: 1..MessageSentLimit, compactedTopicContext: 1..CompactionTimesLimit]
+    LET MessageSpace == Seq([id: 1..MessageSentLimit, key: KeySet, value: ValueSet])
+    IN
+        /\ messages \in MessageSpace
+        /\ compactedLedgers \in [1..CompactionTimesLimit -> Seq(MessageSpace \cup {Nil})]
+        /\ phaseOneResult \in [KeySet -> 1..MessageSentLimit]
+        /\ compactorState \in CompactorState
+        /\ compactionHorizon \in 1..MessageSentLimit
+        /\ compactedTopicContext \in 1..CompactionTimesLimit
+        /\ crashTimes \in 0..(MaxCrashTimes-1)
+        /\ cursor \in [compactionHorizon: 1..MessageSentLimit, compactedTopicContext: 1..CompactionTimesLimit]
 
 
 \* the useless compacted ledger should be deleted, we model deletion as Nil
