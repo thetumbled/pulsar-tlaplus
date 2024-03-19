@@ -224,6 +224,26 @@ TypeSafe ==
 \* the useless compacted ledger should be deleted, we model deletion as Nil
 CompactedLedgerLeak == Cardinality({i \in 1..CompactionTimesLimit : compactedLedgers[i] # Nil}) <= 2
 
+\* the messages before the compaction horizon should be available in the compacted ledger.
+\* the latest one in messages with the same key should be available in the compacted ledger.
+\* the messages after the compaction horizon could be available in the compacted ledger.
+CompactionHorizonCorrectness ==
+    LET
+        compactedLedger == compactedLedgers[compactedTopicContext]
+        messagesBeforeHorizon == [i \in 1..compactionHorizon |->
+                                 IF messages[i].key = NullKey
+                                 THEN IF RetainNullKey
+                                      THEN messages[i]
+                                      ELSE Nil
+                                 ELSE messages[i]]
+    IN
+        \A i \in 1..Len(messagesBeforeHorizon):
+            IF messagesBeforeHorizon[i].key = Null
+            THEN RetainNullKey => \E j \in 1..Len(compactedLedger): compactedLedger[j] = messagesBeforeHorizon[i]
+            ELSE \E j \in 1..Len(compactedLedger):
+                /\ compactedLedger[j].key = messagesBeforeHorizon[i].key
+                /\ compactedLedger[j].id >= messagesBeforeHorizon[i].id
+
 \* consumer should be able to consume all the compacted messages
 
 
