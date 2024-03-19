@@ -192,7 +192,7 @@ Next ==
     \/ /\ ModelConsumer
        /\ Consumer
 
-
+Spec == Init /\ [][Next]_vars
 
 \* Safety properties
 TypeSafe ==
