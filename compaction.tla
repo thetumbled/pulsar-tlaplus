@@ -140,7 +140,7 @@ CompactorPhaseTwoUpdateHorizon ==
 CompactorPhaseTwoPersistCusror ==
     /\ compactorState = Compactor_In_PhaseTwoPersistCusror
     /\ compactorState' = Compactor_In_PhaseTwoDeleteLedger
-    /\ cursor' = [compactionHorizon: compactionHorizon, compactedTopicContext: compactedTopicContext]
+    /\ cursor' = [compactionHorizon |-> compactionHorizon, compactedTopicContext |-> compactedTopicContext]
     /\ UNCHANGED <<messages, compactedLedgers, otherVars, phaseOneResult, compactionHorizon, compactedTopicContext>>
 
 CompactorPhaseTwoDeleteLedger ==
@@ -152,10 +152,10 @@ CompactorPhaseTwoDeleteLedger ==
         \* for simplicity, we delete the second to last compacted ledger
         oldCompactedLedgerId == IF maxledgerId = 1 THEN Nil ELSE maxledgerId - 1
        IN
-         IF compactedLedgers[oldCompactedLedgerId] = Nil
-         THEN compactedLedgers' = compactedLedgers
+         IF oldCompactedLedgerId = Nil \/ compactedLedgers[oldCompactedLedgerId] = Nil
+         THEN UNCHANGED compactedLedgers
          ELSE compactedLedgers' = [compactedLedgers EXCEPT ![oldCompactedLedgerId] = Nil]
-    /\ UNCHANGED <<messages, cursor, otherVars, compactorVars, compactedTopicContext, compactionHorizon>>
+    /\ UNCHANGED <<messages, cursor, otherVars, compactedTopicContext, compactionHorizon>>
 
 
 \* broker crashes, that is compactor crashes
