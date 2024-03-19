@@ -30,14 +30,18 @@ ASSUME /\ MessageSentLimit \in Nat
 CONSTANTS Nil, \* The nil value
           Compactor_In_PhaseOne, \* The compactor is in phase one
           Compactor_In_PhaseTwoWrite, \* The compactor is in phase two write
-          Compactor_In_PhaseTwoAck \* The compactor is in phase two ack
+          Compactor_In_PhaseTwoUpdateContext, \* The compactor is in phase two update context
+          Compactor_In_PhaseTwoUpdateHorizon, \* The compactor is in phase two update horizon
+          Compactor_In_PhaseTwoDeleteLedger \* The compactor is in phase two delete ledger
+
 
 NullKey == 0 \* The nil key
 NullValue == 0 \* The nil value
 KeySet == KeySpace \cup {NullKey} \* The key set, 0 is reserved for the nil key
 ValueSet == ValueSpace \cup {NullValue} \* The value set, 0 is reserved for the nil value
 
-CompactorState == {Compactor_In_PhaseOne, Compactor_In_PhaseTwoWrite, Compactor_In_PhaseTwoAck} \* The state of the compactor
+CompactorState == {Compactor_In_PhaseOne, Compactor_In_PhaseTwoWrite, Compactor_In_PhaseTwoUpdateContext,
+                   Compactor_In_PhaseTwoUpdateHorizon, Compactor_In_PhaseTwoDeleteLedger}
 
 \* bookkeeping the messages
 VARIABLES messages, \* bookkeeping the messages, queue of messages
@@ -109,15 +113,13 @@ CompactorPhaseTwoWrite ==
         /\ ledgerId \in 1..CompactionTimesLimit
         /\ compactedLedgers' = [compactedLedgers EXCEPT ![ledgerId] = compactedMessages]
     /\ phaseOneResult' = Nil
-    /\ compactorState' = Compactor_In_PhaseTwoAck
+    /\ compactorState' = Compactor_In_PhaseTwoUpdateContext
     /\ UNCHANGED <<messages, cursor, otherVars, compactionHorizon, compactedTopicContext>>
 
 
 \* compactor acks the compaction position
-CompactorPhaseTwoAck ==
-    /\ compactorState = Compactor_In_PhaseTwoAck
-    /\ compactorState' = Compactor_In_PhaseOne
-    /\ UNCHANGED <<messages, compactedLedgers, phaseOneResult>>
+CompactorPhaseTwoUpdateContext ==
+    /\
 
 
 \* broker crashes, that is compactor crashes
