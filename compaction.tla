@@ -58,11 +58,12 @@ VARIABLES compactorState,    \* the state of the compactor
           compactedTopicContext \* the compacted topic context, model the compacted ledger
 
 \* some other variables
-VARIABLES crashTimes \* the crash times of the broker
+VARIABLES crashTimes, \* the crash times of the broker
+          consumeTimes \* the consume times of the consumer
 
 bookieVars == <<messages, compactedLedgers>>
 compactorVars == <<phaseOneResult, compactorState, compactionHorizon, compactedTopicContext>>
-otherVars == <<crashTimes>>
+otherVars == <<crashTimes, consumeTimes>>
 vars == <<bookieVars, compactorVars, otherVars>>
 
 
@@ -176,7 +177,19 @@ Init ==
     /\ compactionHorizon = Nil
     /\ compactedTopicContext = Nil
     /\ crashTimes = 0
+    /\ consumeTimes = 0
     /\ cursor = Nil
+
+(* Allow infinite stuttering to prevent deadlock on termination. *)
+Terminating ==
+    \* The producer send complete
+    /\ Len(messages) = MessageSentLimit
+    \* The compactor compact complete
+    /\ compactorState = Compactor_In_PhaseTwoWrite
+    /\ MaxCompactedLedgerId(compactedLedgers) = CompactionTimesLimit
+    \* The consumer consume complete
+    /\ ModelConsumer => consumeTimes = ConsumeTimesLimit
+    /\ UNCHANGED vars
 
 Next ==
     \* The producer
@@ -192,6 +205,7 @@ Next ==
     \* The consumer
     \/ /\ ModelConsumer
        /\ Consumer
+    \/ Terminating
 
 Spec == Init /\ [][Next]_vars
 
@@ -214,5 +228,10 @@ CompactedLedgerLeak == Cardinality({i \in 1..CompactionTimesLimit : compactedLed
 
 
 \* Liveness properties
+Termination == <>(
+    /\ Len(messages) = MessageSentLimit
+    /\ compactorState = Compactor_In_PhaseTwoWrite
+    /\ MaxCompactedLedgerId(compactedLedgers) = CompactionTimesLimit
+    /\ ModelConsumer => consumeTimes = ConsumeTimesLimit)
 
 =============================================================================
