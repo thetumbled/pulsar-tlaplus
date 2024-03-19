@@ -54,7 +54,7 @@ VARIABLES messages, \* bookkeeping the messages, queue of messages
 
 \* variables for the compactor
 VARIABLES compactorState,    \* the state of the compactor
-          phaseOneResult,     \* the result of phase one compaction, model Map<String, MessageId> latestForKey
+          phaseOneResult,     \* the result of phase one compaction, model Map<String, MessageId> latestForKey and int readPosition
           compactionHorizon,  \* the compaction horizon, model the compaction position
           compactedTopicContext \* the compacted topic context, model the compacted ledger
 
@@ -87,20 +87,24 @@ CompactorPhaseOne ==
     /\ compactorState = Compactor_In_PhaseOne
     /\ phaseOneResult = Nil
     /\ Len(messages) > 0 \* there are messages to be compacted
-    /\ phaseOneResult' = [key \in GetKeys(messages) |-> Max({i \in 1..Len(messages) : messages[i].key = key})]
+    /\ phaseOneResult' = [readPosition |-> Len(messages),
+            latestForKey |-> [key \in GetKeys(messages) |-> Max({i \in 1..Len(messages) : messages[i].key = key})]]
     /\ compactorState' = Compactor_In_PhaseTwoWrite
     /\ UNCHANGED <<bookieVars, otherVars, compactionHorizon, compactedTopicContext>>
 
 \* create a new compacted ledger and compact the messages
-MaxCompactedLedgerId(compactedLedgers2) == Max({i \in 1..CompactionTimesLimit : compactedLedgers2[i] # Nil})
+MaxCompactedLedgerId(compactedLedgers2) ==
+    IF \E i \in 1..CompactionTimesLimit: compactedLedgers2[i] # Nil
+    THEN Max({i \in 1..CompactionTimesLimit : compactedLedgers2[i] # Nil})
+    ELSE 0
 CompactMessages(messages2, phaseOneResult2) ==
     LET
-        compactedMessages == [i \in 1..Len(messages2) |->
+        compactedMessages == [i \in 1..phaseOneResult2.readPosition |->
                                 IF messages2[i].key = NullKey
                                 THEN IF RetainNullKey
                                      THEN messages2[i]
                                      ELSE Nil
-                                ELSE IF i = phaseOneResult2[messages2[i].key]
+                                ELSE IF i = phaseOneResult2.latestForKey[messages2[i].key]
                                      THEN messages2[i]
                                      ELSE Nil]
     IN
@@ -117,22 +121,21 @@ CompactorPhaseTwoWrite ==
        IN
         /\ newCompactedLedgerId \in 1..CompactionTimesLimit
         /\ compactedLedgers' = [compactedLedgers EXCEPT ![newCompactedLedgerId] = compactedMessages]
-    /\ phaseOneResult' = Nil
     /\ compactorState' = Compactor_In_PhaseTwoUpdateContext
-    /\ UNCHANGED <<messages, cursor, otherVars, compactionHorizon, compactedTopicContext>>
+    /\ UNCHANGED <<messages, cursor, otherVars, compactionHorizon, compactedTopicContext, phaseOneResult>>
 
 
 CompactorPhaseTwoUpdateContext ==
     /\ compactorState = Compactor_In_PhaseTwoUpdateContext
     /\ compactorState' = Compactor_In_PhaseTwoUpdateHorizon
     /\ compactedTopicContext' = MaxCompactedLedgerId(compactedLedgers)
-    /\ UNCHANGED <<bookieVars, otherVars, compactorVars, phaseOneResult, compactionHorizon>>
+    /\ UNCHANGED <<bookieVars, otherVars, phaseOneResult, compactionHorizon>>
 
 CompactorPhaseTwoUpdateHorizon ==
     /\ compactorState = Compactor_In_PhaseTwoUpdateHorizon
     /\ compactorState' = Compactor_In_PhaseTwoPersistCusror
-    /\ compactionHorizon' = MaxCompactedLedgerId(compactedLedgers)
-    /\ UNCHANGED <<bookieVars, otherVars, compactorVars, phaseOneResult, compactedTopicContext>>
+    /\ compactionHorizon' = phaseOneResult.readPosition
+    /\ UNCHANGED <<bookieVars, otherVars, phaseOneResult, compactedTopicContext>>
 
 CompactorPhaseTwoPersistCusror ==
     /\ compactorState = Compactor_In_PhaseTwoPersistCusror
@@ -143,6 +146,7 @@ CompactorPhaseTwoPersistCusror ==
 CompactorPhaseTwoDeleteLedger ==
     /\ compactorState = Compactor_In_PhaseTwoDeleteLedger
     /\ compactorState' = Compactor_In_PhaseOne
+    /\ phaseOneResult' = Nil
     /\ LET
         maxledgerId == MaxCompactedLedgerId(compactedLedgers)
         \* for simplicity, we delete the second to last compacted ledger
@@ -151,7 +155,7 @@ CompactorPhaseTwoDeleteLedger ==
          IF compactedLedgers[oldCompactedLedgerId] = Nil
          THEN compactedLedgers' = compactedLedgers
          ELSE compactedLedgers' = [compactedLedgers EXCEPT ![oldCompactedLedgerId] = Nil]
-    /\ UNCHANGED <<messages, cursor, otherVars, compactorVars, phaseOneResult, compactedTopicContext, compactionHorizon>>
+    /\ UNCHANGED <<messages, cursor, otherVars, compactorVars, compactedTopicContext, compactionHorizon>>
 
 
 \* broker crashes, that is compactor crashes
@@ -165,9 +169,10 @@ BrokerCrash ==
     /\ IF cursor # Nil
        THEN /\ compactionHorizon' = cursor.compactionHorizon
              /\ compactedTopicContext' = cursor.compactedTopicContext
+       \* if the cursor is Nil, we reset the compaction horizon and compacted topic context to 0
        ELSE /\ compactionHorizon' = 0
              /\ compactedTopicContext' = 0
-    /\ UNCHANGED <<bookieVars, otherVars>>
+    /\ UNCHANGED <<bookieVars, consumeTimes>>
 
 \* Consumer consumes messages
 Consumer ==
@@ -219,11 +224,13 @@ TypeSafe ==
     IN
         /\ \A i \in 1..Len(messages): messages[i] \in MessageSpace
         /\ \A i \in 1..CompactionTimesLimit: compactedLedgers[i] # Nil => \A j \in 1..Len(compactedLedgers[i]): compactedLedgers[i][j] \in MessageSpace
-        /\ phaseOneResult # Nil => \A key \in DOMAIN phaseOneResult: phaseOneResult[key] \in 1..Len(messages)
+        /\ phaseOneResult # Nil =>
+                            /\ \A key \in DOMAIN phaseOneResult.latestForKey: phaseOneResult.latestForKey[key] \in 1..Len(messages)
+                            /\ phaseOneResult.readPosition \in 1..Len(messages)
         /\ compactorState \in CompactorState
         /\ compactionHorizon \in 0..MessageSentLimit
         /\ compactedTopicContext \in 0..CompactionTimesLimit
-        /\ crashTimes \in 0..(MaxCrashTimes-1)
+        /\ crashTimes \in 0..MaxCrashTimes
         /\ cursor \in [compactionHorizon: 1..MessageSentLimit, compactedTopicContext: 1..CompactionTimesLimit] \cup {Nil}
 
 
