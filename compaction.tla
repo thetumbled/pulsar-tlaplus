@@ -32,6 +32,7 @@ CONSTANTS Nil, \* The nil value
           Compactor_In_PhaseTwoWrite, \* The compactor is in phase two write
           Compactor_In_PhaseTwoUpdateContext, \* The compactor is in phase two update context
           Compactor_In_PhaseTwoUpdateHorizon, \* The compactor is in phase two update horizon
+          Compactor_In_PhaseTwoPersistCusror, \* The compactor is in phase two persist cursor
           Compactor_In_PhaseTwoDeleteLedger \* The compactor is in phase two delete ledger
 
 
@@ -41,14 +42,14 @@ KeySet == KeySpace \cup {NullKey} \* The key set, 0 is reserved for the nil key
 ValueSet == ValueSpace \cup {NullValue} \* The value set, 0 is reserved for the nil value
 
 CompactorState == {Compactor_In_PhaseOne, Compactor_In_PhaseTwoWrite, Compactor_In_PhaseTwoUpdateContext,
-                   Compactor_In_PhaseTwoUpdateHorizon, Compactor_In_PhaseTwoDeleteLedger}
+                   Compactor_In_PhaseTwoUpdateHorizon, Compactor_In_PhaseTwoPersistCusror,
+                   Compactor_In_PhaseTwoDeleteLedger}
 
 \* bookkeeping the messages
 VARIABLES messages, \* bookkeeping the messages, queue of messages
           compactedLedgers,  \* bookkeeping the compacted messages,
                              \* mapping from the compacted ledger id to the original message queue
           cursor \* the cursor of __compaction, record the current compaction position and the compacted ledger
-
 
 \* variables for the compactor
 VARIABLES compactorState,    \* the state of the compactor
@@ -87,7 +88,7 @@ CompactorPhaseOne ==
     /\ UNCHANGED <<bookieVars, otherVars, compactionHorizon, compactedTopicContext>>
 
 \* create a new compacted ledger and compact the messages
-GetNewLedgerId(compactedLedgers) == Max({i \in 1..CompactionTimesLimit : compactedLedgers[i] # Nil}) + 1
+MaxCompactedLedgerId(compactedLedgers) == Max({i \in 1..CompactionTimesLimit : compactedLedgers[i] # Nil})
 CompactMessages(messages, phaseOneResult) ==
     LET
         compactedMessages == [i \in 1..Len(messages) |->
@@ -107,7 +108,8 @@ CompactorPhaseTwoWrite ==
     /\ phaseOneResult # Nil
     /\ compactorState = Compactor_In_PhaseTwoWrite
     /\ LET
-        ledgerId == GetNewLedgerId(compactedLedgers)
+        maxledgerId == MaxCompactedLedgerId(compactedLedgers)
+        newCompactedLedgerId == maxledgerId + 1
         compactedMessages == CompactMessages(messages, phaseOneResult)
        IN
         /\ ledgerId \in 1..CompactionTimesLimit
@@ -117,9 +119,36 @@ CompactorPhaseTwoWrite ==
     /\ UNCHANGED <<messages, cursor, otherVars, compactionHorizon, compactedTopicContext>>
 
 
-\* compactor acks the compaction position
 CompactorPhaseTwoUpdateContext ==
-    /\
+    /\ compactorState = Compactor_In_PhaseTwoUpdateContext
+    /\ compactorState' = Compactor_In_PhaseTwoUpdateHorizon
+    /\ compactedTopicContext' = MaxCompactedLedgerId(compactedLedgers)
+    /\ UNCHANGED <<bookieVars, otherVars, compactorVars, phaseOneResult, compactionHorizon>>
+
+CompactorPhaseTwoUpdateHorizon ==
+    /\ compactorState = Compactor_In_PhaseTwoUpdateHorizon
+    /\ compactorState' = Compactor_In_PhaseTwoPersistCusror
+    /\ compactionHorizon' = MaxCompactedLedgerId(compactedLedgers)
+    /\ UNCHANGED <<bookieVars, otherVars, compactorVars, phaseOneResult, compactedTopicContext>>
+
+CompactorPhaseTwoPersistCusror ==
+    /\ compactorState = Compactor_In_PhaseTwoPersistCusror
+    /\ compactorState' = Compactor_In_PhaseTwoDeleteLedger
+    /\ cursor' = [compactionHorizon: compactionHorizon, compactedTopicContext: compactedTopicContext]
+    /\ UNCHANGED <<messages, compactedLedgers, otherVars, phaseOneResult, compactionHorizon, compactedTopicContext>>
+
+CompactorPhaseTwoDeleteLedger ==
+    /\ compactorState = Compactor_In_PhaseTwoDeleteLedger
+    /\ compactorState' = Compactor_In_PhaseOne
+    /\ LET
+        maxledgerId == MaxCompactedLedgerId(compactedLedgers)
+        \* for simplicity, we delete the second to last compacted ledger
+        oldCompactedLedgerId == IF maxledgerId = 1 THEN Nil ELSE maxledgerId - 1
+       IN
+         IF compactedLedgers[oldCompactedLedgerId] = Nil
+         THEN compactedLedgers' = compactedLedgers
+         ELSE compactedLedgers' = [compactedLedgers EXCEPT ![oldCompactedLedgerId] = Nil]
+    /\ UNCHANGED <<messages, cursor, otherVars, compactorVars, phaseOneResult, compactedTopicContex, compactionHorizon>>
 
 
 \* broker crashes, that is compactor crashes
@@ -154,6 +183,10 @@ Next ==
     \* The compactor
     \/ CompactorPhaseOne
     \/ CompactorPhaseTwoWrite
+    \/ CompactorPhaseTwoUpdateContext
+    \/ CompactorPhaseTwoUpdateHorizon
+    \/ CompactorPhaseTwoPersistCusror
+    \/ CompactorPhaseTwoDeleteLedger
     \/ BrokerCrash
     \* The consumer
     \/ /\ ModelConsumer
