@@ -21,7 +21,9 @@ ASSUME /\ MessageSentLimit \in Nat
        /\ ModelConsumer \in BOOLEAN
        /\ ConsumeTimesLimit \in Nat
        /\ KeySpace \in SUBSET Nat
+       /\ 0 \notin KeySpace \* 0 is reserved for the nil key
        /\ ValueSpace \in SUBSET Nat
+       /\ 0 \notin ValueSpace \* 0 is reserved for the null message
        /\ RetainNullKey \in BOOLEAN
        /\ MaxCrashTimes \in Nat
 
@@ -84,6 +86,7 @@ GetKeys(msgs) == {msgs[i].key : i \in 1..Len(msgs)} \ {NullKey}
 CompactorPhaseOne ==
     /\ compactorState = Compactor_In_PhaseOne
     /\ phaseOneResult = Nil
+    /\ Len(messages) > 0 \* there are messages to be compacted
     /\ phaseOneResult' = [key \in GetKeys(messages) |-> Max({i \in 1..Len(messages) : messages[i].key = key})]
     /\ compactorState' = Compactor_In_PhaseTwoWrite
     /\ UNCHANGED <<bookieVars, otherVars, compactionHorizon, compactedTopicContext>>
@@ -159,8 +162,11 @@ BrokerCrash ==
     /\ compactorState' = Compactor_In_PhaseOne
     /\ phaseOneResult' = Nil
     \* reload the compaction horizon and compacted topic context from cursor
-    /\ compactionHorizon' = cursor.compactionHorizon
-    /\ compactedTopicContext' = cursor.compactedTopicContext
+    /\ IF cursor # Nil
+       THEN /\ compactionHorizon' = cursor.compactionHorizon
+             /\ compactedTopicContext' = cursor.compactedTopicContext
+       ELSE /\ compactionHorizon' = 0
+             /\ compactedTopicContext' = 0
     /\ UNCHANGED <<bookieVars, otherVars>>
 
 \* Consumer consumes messages
@@ -209,11 +215,11 @@ Spec == Init /\ [][Next]_vars
 
 \* Safety properties
 TypeSafe ==
-    LET MessageSpace == Seq([id: 1..MessageSentLimit, key: KeySet, value: ValueSet])
+    LET MessageSpace == [id: 1..MessageSentLimit, key: KeySet, value: ValueSet]
     IN
-        /\ messages \in SUBSET MessageSpace
-        /\ compactedLedgers \in [1..CompactionTimesLimit -> Seq(MessageSpace \cup {Nil})]
-        /\ phaseOneResult \in [KeySet -> 1..MessageSentLimit] \cup {Nil}
+        /\ \A i \in 1..Len(messages): messages[i] \in MessageSpace
+        /\ \A i \in 1..CompactionTimesLimit: compactedLedgers[i] # Nil => \A j \in 1..Len(compactedLedgers[i]): compactedLedgers[i][j] \in MessageSpace
+        /\ phaseOneResult # Nil => \A key \in DOMAIN phaseOneResult: phaseOneResult[key] \in 1..Len(messages)
         /\ compactorState \in CompactorState
         /\ compactionHorizon \in 0..MessageSentLimit
         /\ compactedTopicContext \in 0..CompactionTimesLimit
