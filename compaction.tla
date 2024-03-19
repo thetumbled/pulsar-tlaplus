@@ -14,7 +14,8 @@ CONSTANTS MessageSentLimit, \* The maximum number of messages that can be sent
           ConsumeTimesLimit, \* The maximum number of consume times
           KeySpace, \* The key space for producer to generate keys
           ValueSpace, \* The value space for producer to generate values
-          RetainNullKey \* whether retains null key message in compacted ledger
+          RetainNullKey, \* whether retains null key message in compacted ledger
+          MaxCrashTimes \* The maximum number of crash times
 
 ASSUME /\ MessageSentLimit \in Nat
        /\ CompactionTimesLimit \in Nat
@@ -23,6 +24,7 @@ ASSUME /\ MessageSentLimit \in Nat
        /\ KeySpace \in SUBSET Nat
        /\ ValueSpace \in SUBSET Nat
        /\ RetainNullKey \in BOOLEAN
+       /\ MaxCrashTimes \in Nat
 
 \* Model values
 CONSTANTS Nil, \* The nil value
@@ -37,15 +39,26 @@ ValueSet == ValueSpace \cup {NullValue} \* The value set, 0 is reserved for the 
 
 CompactorState == {Compactor_In_PhaseOne, Compactor_In_PhaseTwoWrite, Compactor_In_PhaseTwoAck} \* The state of the compactor
 
+\* bookkeeping the messages
 VARIABLES messages, \* bookkeeping the messages, queue of messages
           compactedLedgers,  \* bookkeeping the compacted messages,
                              \* mapping from the compacted ledger id to the original message queue
-          compactorState,    \* the state of the compactor
-          phaseOneResult     \* the result of phase one compaction, model Map<String, MessageId> latestForKey
+          cursor \* the cursor of __compaction, record the current compaction position and the compacted ledger
 
 
-compactorVars == <<phaseOneResult, compactorState>>
-vars == <<messages, compactedLedgers, compactorVars>>
+\* variables for the compactor
+VARIABLES compactorState,    \* the state of the compactor
+          phaseOneResult,     \* the result of phase one compaction, model Map<String, MessageId> latestForKey
+          compactionHorizon,  \* the compaction horizon, model the compaction position
+          compactedTopicContext \* the compacted topic context, model the compacted ledger
+
+\* some other variables
+VARIABLES crashTimes \* the crash times of the broker
+
+bookieVars == <<messages, compactedLedgers>>
+compactorVars == <<phaseOneResult, compactorState, compactionHorizon, compactedTopicContext>>
+otherVars == <<crashTimes>>
+vars == <<bookieVars, compactorVars, otherVars>>
 
 
 \* producer sends messages
@@ -57,7 +70,7 @@ Producer ==
     /\ Len(messages) < MessageSentLimit
     /\ \E inputKey \in KeySet, inputValue \in ValueSet:
         messages' = Append(messages, ConstructMessage(inputKey, inputValue))
-    /\ UNCHANGED <<compactedLedgers, compactorVars>>
+    /\ UNCHANGED <<compactedLedgers, cursor, compactorVars, otherVars>>
 
 
 \* compactor compacts messages
@@ -67,7 +80,7 @@ CompactorPhaseOne ==
     /\ phaseOneResult = Nil
     /\ phaseOneResult' = [key \in GetKeys(messages) |-> Max({i \in 1..Len(messages) : messages[i].key = key})]
     /\ compactorState' = Compactor_In_PhaseTwoWrite
-    /\ UNCHANGED <<messages, compactedLedgers>>
+    /\ UNCHANGED <<bookieVars, otherVars, compactionHorizon, compactedTopicContext>>
 
 \* create a new compacted ledger and compact the messages
 GetNewLedgerId(compactedLedgers) == Max({i \in 1..CompactionTimesLimit : compactedLedgers[i] # Nil}) + 1
@@ -97,16 +110,41 @@ CompactorPhaseTwoWrite ==
         /\ compactedLedgers' = [compactedLedgers EXCEPT ![ledgerId] = compactedMessages]
     /\ phaseOneResult' = Nil
     /\ compactorState' = Compactor_In_PhaseTwoAck
-    /\ UNCHANGED <<messages>>
+    /\ UNCHANGED <<messages, cursor, otherVars, compactionHorizon, compactedTopicContext>>
 
 
+\* compactor acks the compaction position
+CompactorPhaseTwoAck ==
+    /\ compactorState = Compactor_In_PhaseTwoAck
+    /\ compactorState' = Compactor_In_PhaseOne
+    /\ UNCHANGED <<messages, compactedLedgers, phaseOneResult>>
 
+
+\* broker crashes, that is compactor crashes
+BrokerCrash ==
+    /\ crashTimes < MaxCrashTimes
+    /\ crashTimes' = crashTimes + 1
+    \* reset compactor state and phase one result
+    /\ compactorState' = Compactor_In_PhaseOne
+    /\ phaseOneResult' = Nil
+    \* reload the compaction horizon and compacted topic context from cursor
+    /\ compactionHorizon' = cursor.compactionHorizon
+    /\ compactedTopicContext' = cursor.compactedTopicContext
+    /\ UNCHANGED <<bookieVars, otherVars>>
+
+\* Consumer consumes messages
+Consumer ==
+    UNCHANGED vars
 
 Init ==
     /\ messages = <<>>
     /\ compactedLedgers = [i \in 1..CompactionTimesLimit |-> Nil]
     /\ phaseOneResult = Nil
     /\ compactorState = Compactor_In_PhaseOne
+    /\ compactionHorizon = Nil
+    /\ compactedTopicContext = Nil
+    /\ crashTimes = 0
+    /\ cursor = Nil
 
 Next ==
     \* The producer
@@ -114,9 +152,31 @@ Next ==
     \* The compactor
     \/ CompactorPhaseOne
     \/ CompactorPhaseTwoWrite
+    \/ BrokerCrash
     \* The consumer
     \/ /\ ModelConsumer
        /\ Consumer
 
+
+
+\* Safety properties
+TypeSafe ==
+    /\ messages \in Seq([key: KeySet, value: ValueSet])
+    /\ compactedLedgers \in [1..CompactionTimesLimit -> Seq([key: KeySet, value: ValueSet])]
+    /\ phaseOneResult \in [KeySet -> 1..MessageSentLimit]
+    /\ compactorState \in CompactorState
+    /\ compactionHorizon \in 1..MessageSentLimit
+    /\ compactedTopicContext \in 1..CompactionTimesLimit
+    /\ crashTimes \in 0..(MaxCrashTimes-1)
+    /\ cursor \in [compactionHorizon: 1..MessageSentLimit, compactedTopicContext: 1..CompactionTimesLimit]
+
+
+\* the useless compacted ledger should be deleted, we model deletion as Nil
+CompactedLedgerLeak == Cardinality({i \in 1..CompactionTimesLimit : compactedLedgers[i] # Nil}) <= 2
+
+\* consumer should be able to consume all the compacted messages
+
+
+\* Liveness properties
 
 =============================================================================
