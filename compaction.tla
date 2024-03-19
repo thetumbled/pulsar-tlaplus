@@ -79,7 +79,8 @@ Producer ==
 
 
 \* compactor compacts messages
-GetKeys(messages) == {messages[i].key : i \in 1..Len(messages)} \ {NullKey}
+Max(s) == CHOOSE x \in s: \A y \in s: x >= y
+GetKeys(msgs) == {msgs[i].key : i \in 1..Len(msgs)} \ {NullKey}
 CompactorPhaseOne ==
     /\ compactorState = Compactor_In_PhaseOne
     /\ phaseOneResult = Nil
@@ -88,16 +89,16 @@ CompactorPhaseOne ==
     /\ UNCHANGED <<bookieVars, otherVars, compactionHorizon, compactedTopicContext>>
 
 \* create a new compacted ledger and compact the messages
-MaxCompactedLedgerId(compactedLedgers) == Max({i \in 1..CompactionTimesLimit : compactedLedgers[i] # Nil})
-CompactMessages(messages, phaseOneResult) ==
+MaxCompactedLedgerId(compactedLedgers2) == Max({i \in 1..CompactionTimesLimit : compactedLedgers2[i] # Nil})
+CompactMessages(messages2, phaseOneResult2) ==
     LET
-        compactedMessages == [i \in 1..Len(messages) |->
-                                IF messages[i].key = NullKey
+        compactedMessages == [i \in 1..Len(messages2) |->
+                                IF messages2[i].key = NullKey
                                 THEN IF RetainNullKey
-                                     THEN messages[i]
+                                     THEN messages2[i]
                                      ELSE Nil
-                                ELSE IF i = phaseOneResult[messages[i].key]
-                                     THEN messages[i]
+                                ELSE IF i = phaseOneResult2[messages2[i].key]
+                                     THEN messages2[i]
                                      ELSE Nil]
         ValidIndex == {i \in 1..Len(compactedMessages) : compactedMessages[i] # Nil}
     IN
@@ -112,8 +113,8 @@ CompactorPhaseTwoWrite ==
         newCompactedLedgerId == maxledgerId + 1
         compactedMessages == CompactMessages(messages, phaseOneResult)
        IN
-        /\ ledgerId \in 1..CompactionTimesLimit
-        /\ compactedLedgers' = [compactedLedgers EXCEPT ![ledgerId] = compactedMessages]
+        /\ newCompactedLedgerId \in 1..CompactionTimesLimit
+        /\ compactedLedgers' = [compactedLedgers EXCEPT ![newCompactedLedgerId] = compactedMessages]
     /\ phaseOneResult' = Nil
     /\ compactorState' = Compactor_In_PhaseTwoUpdateContext
     /\ UNCHANGED <<messages, cursor, otherVars, compactionHorizon, compactedTopicContext>>
@@ -148,7 +149,7 @@ CompactorPhaseTwoDeleteLedger ==
          IF compactedLedgers[oldCompactedLedgerId] = Nil
          THEN compactedLedgers' = compactedLedgers
          ELSE compactedLedgers' = [compactedLedgers EXCEPT ![oldCompactedLedgerId] = Nil]
-    /\ UNCHANGED <<messages, cursor, otherVars, compactorVars, phaseOneResult, compactedTopicContex, compactionHorizon>>
+    /\ UNCHANGED <<messages, cursor, otherVars, compactorVars, phaseOneResult, compactedTopicContext, compactionHorizon>>
 
 
 \* broker crashes, that is compactor crashes
