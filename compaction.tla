@@ -60,7 +60,7 @@ VARIABLES compactorState,    \* the state of the compactor
 VARIABLES crashTimes, \* the crash times of the broker
           consumeTimes \* the consume times of the consumer
 
-bookieVars == <<messages, compactedLedgers>>
+bookieVars == <<messages, compactedLedgers, cursor>>
 compactorVars == <<phaseOneResult, compactorState, compactionHorizon, compactedTopicContext>>
 otherVars == <<crashTimes, consumeTimes>>
 vars == <<bookieVars, compactorVars, otherVars>>
@@ -172,8 +172,8 @@ Init ==
     /\ compactedLedgers = [i \in 1..CompactionTimesLimit |-> Nil]
     /\ phaseOneResult = Nil
     /\ compactorState = Compactor_In_PhaseOne
-    /\ compactionHorizon = Nil
-    /\ compactedTopicContext = Nil
+    /\ compactionHorizon = 0
+    /\ compactedTopicContext = 0
     /\ crashTimes = 0
     /\ consumeTimes = 0
     /\ cursor = Nil
@@ -211,14 +211,14 @@ Spec == Init /\ [][Next]_vars
 TypeSafe ==
     LET MessageSpace == Seq([id: 1..MessageSentLimit, key: KeySet, value: ValueSet])
     IN
-        /\ messages \in MessageSpace
+        /\ messages \in SUBSET MessageSpace
         /\ compactedLedgers \in [1..CompactionTimesLimit -> Seq(MessageSpace \cup {Nil})]
-        /\ phaseOneResult \in [KeySet -> 1..MessageSentLimit]
+        /\ phaseOneResult \in [KeySet -> 1..MessageSentLimit] \cup {Nil}
         /\ compactorState \in CompactorState
-        /\ compactionHorizon \in 1..MessageSentLimit
-        /\ compactedTopicContext \in 1..CompactionTimesLimit
+        /\ compactionHorizon \in 0..MessageSentLimit
+        /\ compactedTopicContext \in 0..CompactionTimesLimit
         /\ crashTimes \in 0..(MaxCrashTimes-1)
-        /\ cursor \in [compactionHorizon: 1..MessageSentLimit, compactedTopicContext: 1..CompactionTimesLimit]
+        /\ cursor \in [compactionHorizon: 1..MessageSentLimit, compactedTopicContext: 1..CompactionTimesLimit] \cup {Nil}
 
 
 \* the useless compacted ledger should be deleted, we model deletion as Nil
@@ -238,7 +238,7 @@ CompactionHorizonCorrectness ==
                                  ELSE messages[i]]
     IN
         \A i \in 1..Len(messagesBeforeHorizon):
-            IF messagesBeforeHorizon[i].key = Null
+            IF messagesBeforeHorizon[i].key = NullKey
             THEN RetainNullKey => \E j \in 1..Len(compactedLedger): compactedLedger[j] = messagesBeforeHorizon[i]
             ELSE \E j \in 1..Len(compactedLedger):
                 /\ compactedLedger[j].key = messagesBeforeHorizon[i].key
