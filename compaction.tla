@@ -14,7 +14,13 @@ CONSTANTS MessageSentLimit, \* The maximum number of messages that can be sent
           KeySpace, \* The key space for producer to generate keys
           ValueSpace, \* The value space for producer to generate values
           RetainNullKey, \* whether retains null key message in compacted ledger
-          MaxCrashTimes \* The maximum number of crash times
+          MaxCrashTimes, \* The maximum number of crash times
+          PregenerateMessages \* whether pregenerate messages to replace the producer
+                               \* if it is true, the model of the producer will be disabled
+                               \* and the messages will be pregenerated in the Init action to reduce the state space
+                               \* as there is few chance to find a bug involving the producer,
+                               \* we can set it to true to speed up the model checking
+                               \* if disable consumer model, the state space decrease from 253361 to 45198
 
 ASSUME /\ MessageSentLimit \in Nat
        /\ CompactionTimesLimit \in Nat
@@ -70,13 +76,13 @@ vars == <<bookieVars, compactorVars, otherVars>>
 
 \* producer sends messages
 \* may be we could replace the producer with pre-defined messages to minimize the state space
-ConstructMessage(inputKey, inputValue) ==
-    [id |-> Len(messages) + 1, key |-> inputKey, value |-> inputValue]
+ConstructMessage(inputId, inputKey, inputValue) ==
+    [id |-> inputId, key |-> inputKey, value |-> inputValue]
 
 Producer ==
     /\ Len(messages) < MessageSentLimit
     /\ \E inputKey \in KeySet, inputValue \in ValueSet:
-        messages' = Append(messages, ConstructMessage(inputKey, inputValue))
+        messages' = Append(messages, ConstructMessage(Len(messages) + 1, inputKey, inputValue))
     /\ UNCHANGED <<compactedLedgers, cursor, compactorVars, otherVars>>
 
 
@@ -179,7 +185,14 @@ Consumer ==
     UNCHANGED vars
 
 Init ==
-    /\ messages = <<>>
+    /\ \/ /\ ~PregenerateMessages
+          /\ messages = <<>>
+       \/ /\ PregenerateMessages
+          \* use \in to randomly select a value from the sequences set(functions set).
+          /\ messages \in {msgs \in [1..MessageSentLimit -> [id: 1..MessageSentLimit, key: KeySet, value: ValueSet]]:
+                                        \A i \in 1..MessageSentLimit: msgs[i].id = i}
+\*          /\ DOMAIN messages = 1..MessageSentLimit
+\*          /\ \A i \in 1..MessageSentLimit: messages[i] \in [id: i, key: KeySet, value: ValueSet]
     /\ compactedLedgers = [i \in 1..CompactionTimesLimit |-> Nil]
     /\ phaseOneResult = Nil
     /\ compactorState = Compactor_In_PhaseOne
@@ -193,7 +206,8 @@ Init ==
 Terminating ==
     \* The producer send complete
     /\ Len(messages) = MessageSentLimit
-    \* The compactor compact complete
+    \* The compactor compact complete, the last phase is phase two write(if there are messages to be compacted)
+    \* or phase one(if there are no messages to be compacted)
     /\ compactorState = Compactor_In_PhaseTwoWrite
     /\ MaxCompactedLedgerId(compactedLedgers) = CompactionTimesLimit
     \* The consumer consume complete
@@ -202,7 +216,8 @@ Terminating ==
 
 Next ==
     \* The producer
-    \/ Producer
+    \/ /\ ~PregenerateMessages
+       /\ Producer
     \* The compactor
     \/ CompactorPhaseOne
     \/ CompactorPhaseTwoWrite
