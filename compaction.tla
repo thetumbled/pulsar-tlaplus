@@ -15,12 +15,12 @@ CONSTANTS MessageSentLimit, \* The maximum number of messages that can be sent
           ValueSpace, \* The value space for producer to generate values
           RetainNullKey, \* whether retains null key message in compacted ledger
           MaxCrashTimes, \* The maximum number of crash times
-          PregenerateMessages \* whether pregenerate messages to replace the producer
-                               \* if it is true, the model of the producer will be disabled
-                               \* and the messages will be pregenerated in the Init action to reduce the state space
+          ModelProducer \* whether model producer is enabled
+                               \* if it is set to false, we will pregenerate messages to replace the producer
+                               \* which can reduce the state space significantly.
                                \* as there is few chance to find a bug involving the producer,
-                               \* we can set it to true to speed up the model checking
-                               \* if disable consumer model, the state space decrease from 253361 to 45198
+                               \* we can set it to false to speed up the model checking
+                               \* if disable modelling of consumer and producer, the state space decrease from 253361 to 45198
 
 ASSUME /\ MessageSentLimit \in Nat
        /\ CompactionTimesLimit \in Nat
@@ -32,6 +32,7 @@ ASSUME /\ MessageSentLimit \in Nat
        /\ 0 \notin ValueSpace \* 0 is reserved for the null message
        /\ RetainNullKey \in BOOLEAN
        /\ MaxCrashTimes \in Nat
+       /\ ModelProducer \in BOOLEAN
 
 \* Model values
 CONSTANTS Nil, \* The nil value
@@ -185,9 +186,9 @@ Consumer ==
     UNCHANGED vars
 
 Init ==
-    /\ \/ /\ ~PregenerateMessages
+    /\ \/ /\ ModelProducer
           /\ messages = <<>>
-       \/ /\ PregenerateMessages
+       \/ /\ ~ModelProducer
           \* use \in to randomly select a value from the sequences set(functions set).
           /\ messages \in {msgs \in [1..MessageSentLimit -> [id: 1..MessageSentLimit, key: KeySet, value: ValueSet]]:
                                         \A i \in 1..MessageSentLimit: msgs[i].id = i}
@@ -207,7 +208,7 @@ Terminating ==
     \* The producer send complete
     /\ Len(messages) = MessageSentLimit
     \* The compactor compact complete, the last phase is phase two write(if there are messages to be compacted)
-    \* or phase one(if there are no messages to be compacted)
+    \* or phase one(if there are no messages to be compacted, but we don't care about this case)
     /\ compactorState = Compactor_In_PhaseTwoWrite
     /\ MaxCompactedLedgerId(compactedLedgers) = CompactionTimesLimit
     \* The consumer consume complete
@@ -216,7 +217,7 @@ Terminating ==
 
 Next ==
     \* The producer
-    \/ /\ ~PregenerateMessages
+    \/ /\ ModelProducer
        /\ Producer
     \* The compactor
     \/ CompactorPhaseOne
@@ -255,7 +256,8 @@ CompactedLedgerLeak == Cardinality({i \in 1..CompactionTimesLimit : compactedLed
 
 \* the messages before the compaction horizon should be available in the compacted ledger.
 \* the latest one in messages with the same key should be available in the compacted ledger.
-\* the messages after the compaction horizon could be available in the compacted ledger.
+\* the messages after the compaction horizon could be available in the compacted ledger
+\* as the compaction horizon may be smaller than actual compaction position.
 CompactionHorizonCorrectness ==
     LET
         compactedLedger == compactedLedgers[compactedTopicContext]
@@ -272,6 +274,28 @@ CompactionHorizonCorrectness ==
             ELSE \E j \in 1..Len(compactedLedger):
                 /\ compactedLedger[j].key = messagesBeforeHorizon[i].key
                 /\ compactedLedger[j].id >= messagesBeforeHorizon[i].id
+
+\* For null key message, we may don't allow it be consumed mulitple times,
+\* that is any null key message in compacted ledger should not be appeared in the messages after the compaction horizon.
+\* For non-null key message, we may allow it be consumed mulitple times, as we only care about the latest message with the same key.
+DuplicateNullKeyMessage ==
+    RetainNullKey /\ compactedTopicContext # 0 =>
+        LET
+            range == compactionHorizon+1..Len(messages)
+            compactedLedger == compactedLedgers[compactedTopicContext]
+            messagesAfterHorizon == [i \in range |->
+                                     IF messages[i].key = NullKey
+                                     THEN IF RetainNullKey
+                                          THEN messages[i]
+                                          ELSE Nil
+                                     ELSE messages[i]]
+        IN
+            \A i \in 1..Len(compactedLedger):
+                compactedLedger[i].key # NullKey \/
+                \A j \in range: compactedLedger[i] # messagesAfterHorizon[j]
+
+
+
 
 \* consumer should be able to consume all the compacted messages
 
