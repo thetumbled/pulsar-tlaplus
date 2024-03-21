@@ -192,8 +192,6 @@ Init ==
           \* use \in to randomly select a value from the sequences set(functions set).
           /\ messages \in {msgs \in [1..MessageSentLimit -> [id: 1..MessageSentLimit, key: KeySet, value: ValueSet]]:
                                         \A i \in 1..MessageSentLimit: msgs[i].id = i}
-\*          /\ DOMAIN messages = 1..MessageSentLimit
-\*          /\ \A i \in 1..MessageSentLimit: messages[i] \in [id: i, key: KeySet, value: ValueSet]
     /\ compactedLedgers = [i \in 1..CompactionTimesLimit |-> Nil]
     /\ phaseOneResult = Nil
     /\ compactorState = Compactor_In_PhaseOne
