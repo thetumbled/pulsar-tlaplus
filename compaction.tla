@@ -278,6 +278,7 @@ CompactionHorizonCorrectness ==
 \* For null key message, we may don't allow it be consumed mulitple times,
 \* that is any null key message in compacted ledger should not be appeared in the messages after the compaction horizon.
 \* For non-null key message, we may allow it be consumed mulitple times, as we only care about the latest message with the same key.
+\* we can use this invariant to reproduce the message duplication bug, which is not fixed yet
 DuplicateNullKeyMessage ==
     RetainNullKey /\ compactedTopicContext # 0 =>
         LET
